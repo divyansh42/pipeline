@@ -82,10 +82,23 @@ func TestPipelineLevelFinally_OneDAGTaskFailed_InvalidTaskResult_Failure(t *test
 		t.Fatalf("Failed to create Task producing task results: %s", err)
 	}
 
+	//taskClaimingResultProductionButNotProducing := getSuccessTaskClaimProducingResultButNotProducing(t, namespace)
+	//taskClaimingResultProductionButNotProducing.Spec.Results = append(taskClaimingResultProductionButNotProducing.Spec.Results, v1.TaskResult{
+	//	Name: "result",
+	//})
+	//if _, err := c.V1TaskClient.Create(ctx, taskClaimingResultProductionButNotProducing, metav1.CreateOptions{}); err != nil {
+	//	t.Fatalf("Failed to create Task claiming result production but not producing task results: %s", err)
+	//}
+
 	taskConsumingResultInParam := getSuccessTaskConsumingResults(t, namespace, "dagtask-result")
 	if _, err := c.V1TaskClient.Create(ctx, taskConsumingResultInParam, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Task consuming task results in param: %s", err)
 	}
+
+	//taskConsumingResultInParam1 := getSuccessTaskConsumingResults1(t, namespace, "dagtask-result")
+	//if _, err := c.V1TaskClient.Create(ctx, taskConsumingResultInParam1, metav1.CreateOptions{}); err != nil {
+	//	t.Fatalf("Failed to create Task consuming task results in param: %s", err)
+	//}
 
 	taskConsumingResultInWhenExpression := getSuccessTask(t, namespace)
 	if _, err := c.V1TaskClient.Create(ctx, taskConsumingResultInWhenExpression, metav1.CreateOptions{}); err != nil {
@@ -205,6 +218,35 @@ spec:
   - name: dagtask5
     taskRef:
       name: %s
+  - name: dagtask6
+    taskSpec:
+      steps:
+      - name: hello
+        image: registry.access.redhat.com/ubi8/ubi-minimal
+        script: |
+          #!/usr/bin/env bash
+          echo "Hello from task A"
+          # uncomment to fix the issue
+          #echo "foo" > $(results.foo.path)
+          sleep 5
+      results:
+        - name: foo
+  - name: dagtaskconsumingdagtask6
+    params:
+    - name: input
+      value: $(tasks.dagtask6.results.foo)
+    taskSpec:
+      params:
+        - name: input
+      steps:
+      - name: hello
+        image: registry.access.redhat.com/ubi8/ubi-minimal
+        script: |
+          #!/usr/bin/env bash
+          echo "Hello from task B"
+          echo "Content of param: $(params.input)"
+          sleep 5
+  
 `, helpers.ObjectNameForTest(t), namespace,
 		// Finally
 		successTask.Name, finalTaskWithStatus.Name, taskConsumingResultInParam.Name,
@@ -212,7 +254,7 @@ spec:
 		taskConsumingResultInWhenExpression.Name, taskConsumingResultInWhenExpression.Name, taskConsumingResultInWhenExpression.Name,
 		taskConsumingResultInWhenExpression.Name,
 		// Tasks
-		task.Name, delayedTask.Name, successTask.Name, successTask.Name, taskProducingResult.Name))
+		task.Name, delayedTask.Name, successTask.Name, successTask.Name, taskProducingResult.Name /*taskClaimingResultProductionButNotProducing.Name, taskConsumingResultInParam1.Name*/))
 	if _, err := c.V1PipelineClient.Create(ctx, pipeline, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("Failed to create Pipeline: %s", err)
 	}
@@ -237,9 +279,9 @@ spec:
 		t.Fatalf("Error listing TaskRuns for PipelineRun %s: %s", pipelineRun.Name, err)
 	}
 
-	// expecting taskRuns for dagtask1, dagtask2, dagtask5, finaltask1, finaltask2,
+	// expecting taskRuns for dagtask1, dagtask2, dagtask5, dagtask6, finaltask1, finaltask2,
 	// finaltaskconsumingdagtask5, guardedfinaltaskusingdagtask5result1, guardedfinaltaskusingdagtask5status1
-	expectedTaskRunsCount := 8
+	expectedTaskRunsCount := 9
 	if len(taskrunList.Items) != expectedTaskRunsCount {
 		var s []string
 		for _, n := range taskrunList.Items {
@@ -266,6 +308,10 @@ spec:
 		case n == "dagtask4":
 			t.Fatalf("task %s should have skipped due to when expression", n)
 		case n == "dagtask5":
+			if err := WaitForTaskRunState(ctx, c, taskrunItem.Name, TaskRunSucceed(taskrunItem.Name), "TaskRunSuccess", v1Version); err != nil {
+				t.Errorf("Error waiting for TaskRun to succeed: %v", err)
+			}
+		case n == "dagtask6":
 			if err := WaitForTaskRunState(ctx, c, taskrunItem.Name, TaskRunSucceed(taskrunItem.Name), "TaskRunSuccess", v1Version); err != nil {
 				t.Errorf("Error waiting for TaskRun to succeed: %v", err)
 			}
@@ -688,6 +734,106 @@ spec:
 	}
 }
 
+func TestPipelineLevelFinally_OneDAGPassedNotProducingResult_SecondDAGUsingResult_Failure(t *testing.T) {
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	c, namespace := setup(ctx, t)
+	knativetest.CleanupOnInterrupt(func() { tearDown(ctx, t, c, namespace) }, t.Logf)
+	defer tearDown(ctx, t, c, namespace)
+
+	successTask := getSuccessTask(t, namespace)
+	successTask.Spec.Results = append(successTask.Spec.Results, v1.TaskResult{
+		Name: "result",
+	})
+	if _, err := c.V1TaskClient.Create(ctx, successTask, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("Failed to create final Task: %s", err)
+	}
+
+	taskProducingResult := getSuccessTaskProducingResults(t, namespace)
+	taskProducingResult.Spec.Results = append(taskProducingResult.Spec.Results, v1.TaskResult{
+		Name: "result",
+	})
+	if _, err := c.V1TaskClient.Create(ctx, taskProducingResult, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("Failed to create Task producing task results: %s", err)
+	}
+
+	//taskClaimingResultProductionButNotProducing := getSuccessTaskClaimProducingResultButNotProducing(t, namespace)
+	//if _, err := c.V1TaskClient.Create(ctx, taskClaimingResultProductionButNotProducing, metav1.CreateOptions{}); err != nil {
+	//	t.Fatalf("Failed to create Task claiming result production but not producing task results: %s", err)
+	//}
+
+	taskConsumingResultInParam := getTaskConsumingResults(t, namespace, "dagtask-result")
+	if _, err := c.V1TaskClient.Create(ctx, taskConsumingResultInParam, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("Failed to create Task consuming task results in param: %s", err)
+	}
+
+	pipeline := parse.MustParseV1Pipeline(t, fmt.Sprintf(`
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  finally:
+  - name: finaltask1
+	taskRef:
+      name: %s
+  tasks:
+  - name: dagtask1
+	taskRef:
+	  name: %s
+  - name: dagtaskconsumingdagtask1
+    params:
+    - name: dagtask1-result
+      value: $(tasks.dagtask1.results.result)
+    taskRef:
+      name: %s
+`, helpers.ObjectNameForTest(t), namespace, successTask.Name, taskProducingResult.Name, taskConsumingResultInParam.Name))
+	if _, err := c.V1PipelineClient.Create(ctx, pipeline, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("Failed to create Pipeline: %s", err)
+	}
+
+	pipelineRun := getPipelineRun(t, namespace, pipeline.Name)
+	if _, err := c.V1PipelineRunClient.Create(ctx, pipelineRun, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("Failed to create Pipeline Run `%s`: %s", pipelineRun.Name, err)
+	}
+
+	if err := WaitForPipelineRunState(ctx, c, pipelineRun.Name, timeout, PipelineRunFailed(pipelineRun.Name), "PipelineRunFailed", v1Version); err != nil {
+		t.Fatalf("Waiting for PipelineRun %s to fail: %v", pipelineRun.Name, err)
+	}
+
+	taskrunList, err := c.V1TaskRunClient.List(ctx, metav1.ListOptions{LabelSelector: "tekton.dev/pipelineRun=" + pipelineRun.Name})
+	if err != nil {
+		t.Fatalf("Error listing TaskRuns for PipelineRun %s: %s", pipelineRun.Name, err)
+	}
+
+	// expecting taskRuns for finaltask1 and dagtask
+	expectedTaskRunsCount := 2
+	if len(taskrunList.Items) != expectedTaskRunsCount {
+		var s []string
+		for _, n := range taskrunList.Items {
+			s = append(s, n.Labels["tekton.dev/pipelineTask"])
+		}
+		t.Fatalf("Error retrieving TaskRuns for PipelineRun %s. Expected %d taskRuns and found %d taskRuns for: %s",
+			pipelineRun.Name, expectedTaskRunsCount, len(taskrunList.Items), strings.Join(s, ", "))
+	}
+
+	// verify dag task failed, parallel dag task succeeded, and final task succeeded
+	for _, taskrunItem := range taskrunList.Items {
+		switch n := taskrunItem.Labels["tekton.dev/pipelineTask"]; {
+		case n == "dagtask1":
+			if !isFailed(t, n, taskrunItem.Status.Conditions) {
+				t.Fatalf("dag task %s should have failed", n)
+			}
+		case n == "finaltask1":
+			if err := WaitForTaskRunState(ctx, c, taskrunItem.Name, TaskRunSucceed(taskrunItem.Name), "TaskRunSuccess", v1Version); err != nil {
+				t.Errorf("Error waiting for TaskRun to succeed: %v", err)
+			}
+		default:
+			t.Fatalf("Found unexpected taskRun %s", n)
+		}
+	}
+}
+
 func getSuccessTask(t *testing.T, namespace string) *v1.Task {
 	t.Helper()
 	return parse.MustParseV1Task(t, fmt.Sprintf(`
@@ -760,6 +906,21 @@ spec:
 `, helpers.ObjectNameForTest(t), namespace))
 }
 
+func getSuccessTaskClaimProducingResultButNotProducing(t *testing.T, namespace string) *v1.Task {
+	t.Helper()
+	return parse.MustParseV1Task(t, fmt.Sprintf(`
+metadata:
+ name: %s
+ namespace: %s
+spec:
+ steps:
+ - image: mirror.gcr.io/alpine
+   script: echo -n "Hello"
+ results:
+ - name: result
+`, helpers.ObjectNameForTest(t), namespace))
+}
+
 func getDelaySuccessTaskProducingResults(t *testing.T, namespace string) *v1.Task {
 	t.Helper()
 	return parse.MustParseV1Task(t, fmt.Sprintf(`
@@ -788,6 +949,21 @@ spec:
   params:
   - name: %s
 `, helpers.ObjectNameForTest(t), namespace, paramName))
+}
+
+func getTaskConsumingResults(t *testing.T, namespace string, paramName string) *v1.Task {
+	t.Helper()
+	return parse.MustParseV1Task(t, fmt.Sprintf(`
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  steps:
+  - image: mirror.gcr.io/alpine
+    script: 'echo "Content of param: $(params.%s)" '
+  params:
+  - name: %s
+`, helpers.ObjectNameForTest(t), namespace, paramName, paramName))
 }
 
 func getPipelineRun(t *testing.T, namespace, p string) *v1.PipelineRun {

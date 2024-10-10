@@ -1,0 +1,44 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: finally-pipeline
+spec:
+  tasks:
+    - name: task-a
+      taskSpec:
+        steps:
+          - name: hello
+            image: registry.access.redhat.com/ubi8/ubi-minimal
+            script: |
+              #!/usr/bin/env bash
+              echo "Hello from task A"
+              # uncomment to fix the issue
+              #echo "foo" > $(results.foo.path)
+              sleep 5
+        results:
+          - name: foo
+    - name: task-b
+      params:
+        - name: input
+          value: $(tasks.task-a.results.foo)
+      taskSpec:
+        params:
+          - name: input
+        steps:
+          - name: hello
+            image: registry.access.redhat.com/ubi8/ubi-minimal
+            script: |
+              #!/usr/bin/env bash
+              echo "Hello from task B"
+              echo "Content of param: $(params.input)"
+              sleep 5
+  finally:
+    - name: final-task
+      taskSpec:
+        steps:
+          - name: finally
+            image: registry.access.redhat.com/ubi8/ubi-minimal
+            script: |
+              #!/usr/bin/env bash
+              echo "Hello from finally"
+              sleep 5
